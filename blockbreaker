@@ -1,0 +1,511 @@
+Attribute VB_Name = "Module1"
+Option Explicit
+
+#If Win64 Then
+    Private Declare PtrSafe Function SetForegroundWindow Lib "user32" (ByVal hwnd As LongPtr) As Long
+#Else
+    Private Declare Function SetForegroundWindow Lib "user32" (ByVal hwnd As Long) As Long
+#End If
+
+#If Win64 Then
+    Private Declare PtrSafe Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
+#Else
+    Private Declare Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
+#End If
+
+' 游戏常量
+Private Const GAME_AREA_WIDTH As Integer = 15   ' 游戏区域宽度(单元格)
+Private Const GAME_AREA_HEIGHT As Integer = 30  ' 游戏区域高度(单元格)
+Private Const BRICK_ROWS As Integer = 5         ' 砖块行数
+Private Const BRICK_COLS As Integer = 10        ' 砖块列数
+Private Const PADDLE_WIDTH As Integer = 3       ' 挡板宽度(单元格)
+Private Const BALL_SIZE As Integer = 1          ' 球大小(单元格)
+Private Const INITIAL_LIVES As Integer = 3      ' 初始生命数
+Private Const SCORE_PER_BRICK As Integer = 100   ' 每块砖分数
+
+' 游戏变量
+Private GameActive As Boolean
+Private Lives As Integer
+Private Level As Integer
+Private Score As Integer
+Private BallX As Double
+Private BallY As Double
+Private BallSpeedX As Double
+Private BallSpeedY As Double
+Private PaddlePos As Integer
+Private BrickCount As Integer
+
+' 形状名称常量
+Private Const GAME_AREA_NAME As String = "GameArea"
+Private Const INFO_AREA_NAME As String = "InfoArea"
+Private Const PADDLE_NAME As String = "Paddle"
+Private Const BALL_NAME As String = "Ball"
+Private Const BRICK_PREFIX As String = "Brick_"
+
+Public LastControlTime As Double  ' 记录最后操作时间
+
+' 向左移动挡板
+Public Sub MovePaddleLeft()
+    If Not GameActive Then Exit Sub
+    LastControlTime = Timer  ' 更新最后操作时间戳
+    On Error Resume Next
+    Dim paddle As Shape
+    Set paddle = ActiveSheet.Shapes(PADDLE_NAME)
+    If paddle Is Nothing Then Exit Sub
+    
+    ' 左移（确保不超出左边界）
+    Dim gameArea As Shape
+    Set gameArea = ActiveSheet.Shapes(GAME_AREA_NAME)
+    
+    If paddle.Left > gameArea.Left Then
+        paddle.Left = paddle.Left - 20  ' 移动步长（像素）
+        PaddlePos = PaddlePos - 1
+    End If
+End Sub
+
+' 向右移动挡板
+Public Sub MovePaddleRight()
+    If Not GameActive Then Exit Sub
+    LastControlTime = Timer  ' 更新最后操作时间戳
+    On Error Resume Next
+    Dim paddle As Shape
+    Set paddle = ActiveSheet.Shapes(PADDLE_NAME)
+    If paddle Is Nothing Then Exit Sub
+    
+    ' 右移（确保不超出右边界）
+    Dim gameArea As Shape
+    Set gameArea = ActiveSheet.Shapes(GAME_AREA_NAME)
+    
+    If paddle.Left + paddle.Width < gameArea.Left + gameArea.Width Then
+        paddle.Left = paddle.Left + 20  ' 移动步长（像素）
+        PaddlePos = PaddlePos + 1
+    End If
+End Sub
+
+' 初始化游戏
+Sub InitializeGame()
+    ' 清除现有游戏元素
+    ClearGame
+    
+    ' 强制窗口焦点（LTSC优化版）
+    ForceExcelFocus
+    
+    ' 延迟确保焦点生效
+    Application.Wait Now + TimeSerial(0, 0, 0.2)
+    
+    ' 设置游戏区域
+    SetupGameArea
+    
+    ' 初始化游戏状态
+    GameActive = True
+    Lives = INITIAL_LIVES
+    Level = 1
+    Score = 0
+    
+    ' 创建游戏元素
+    CreatePaddle
+    CreateBall
+    CreateBricks
+    
+    ' 更新游戏信息
+    UpdateGameInfo
+    
+    ' 设置键盘和鼠标事件
+    SetupEvents
+    
+    ' 开始游戏循环
+    StartGameLoop
+End Sub
+
+' 清除游戏
+Sub ClearGame()
+    Dim shp As Shape
+    
+    GameActive = False
+    
+    ' 删除所有游戏相关形状
+    On Error Resume Next ' 防止形状不存在时报错
+    For Each shp In ActiveSheet.Shapes
+        If shp.Name = GAME_AREA_NAME Or _
+           shp.Name = INFO_AREA_NAME Or _
+           shp.Name = PADDLE_NAME Or _
+           shp.Name = BALL_NAME Or _
+           shp.Name Like BRICK_PREFIX & "*" Then
+            shp.Delete
+        End If
+    Next shp
+    On Error GoTo 0
+    
+    ' 移除事件处理程序
+    RemoveEvents
+    
+    GameActive = False
+End Sub
+
+' 设置游戏区域
+Sub SetupGameArea()
+    Dim gameArea As Shape
+    Dim infoArea As Shape
+    Dim startCell As Range
+    
+    ' 设置游戏区域
+    Set startCell = ActiveSheet.Range("B2")
+    Set gameArea = ActiveSheet.Shapes.AddShape(msoShapeRectangle, _
+        startCell.Left, startCell.Top, _
+        ActiveSheet.Cells(1, GAME_AREA_WIDTH).Width * GAME_AREA_WIDTH, _
+        ActiveSheet.Cells(GAME_AREA_HEIGHT, 1).Height * GAME_AREA_HEIGHT)
+    
+    With gameArea
+        .Name = GAME_AREA_NAME
+        .Fill.Visible = msoFalse
+        .Line.Weight = 2
+        .Line.ForeColor.RGB = RGB(0, 0, 0)
+    End With
+    
+    ' 设置信息区域
+    Set infoArea = ActiveSheet.Shapes.AddShape(msoShapeRectangle, _
+        startCell.Left, startCell.Top - 30, _
+        gameArea.Width, 25)
+    
+    With infoArea
+        .Name = INFO_AREA_NAME
+        .Fill.ForeColor.RGB = RGB(0, 0, 0)
+        .Line.Weight = 1
+        .Line.ForeColor.RGB = RGB(200, 200, 200)
+        .TextFrame.Characters.Text = "生命: 3  关数: 1  分数: 0"
+        .TextFrame.HorizontalAlignment = xlCenter
+        .TextFrame.VerticalAlignment = xlCenter
+    End With
+End Sub
+
+' 创建挡板
+Sub CreatePaddle()
+    Dim paddle As Shape
+    Dim gameArea As Shape
+    Dim startX As Double, startY As Double
+    
+    Set gameArea = ActiveSheet.Shapes(GAME_AREA_NAME)
+    
+    ' 计算挡板起始位置(居中底部)
+    startX = gameArea.Left + (gameArea.Width - ActiveSheet.Cells(1, PADDLE_WIDTH).Width * PADDLE_WIDTH) / 2
+    startY = gameArea.Top + gameArea.Height - 10 ' 距离底部10像素
+    
+    Set paddle = ActiveSheet.Shapes.AddShape(msoShapeRectangle, _
+        startX, startY, _
+        ActiveSheet.Cells(1, PADDLE_WIDTH).Width * PADDLE_WIDTH, 5)
+    
+    With paddle
+        .Name = PADDLE_NAME
+        .Fill.ForeColor.RGB = RGB(0, 0, 255)
+        .Line.Visible = msoFalse
+    End With
+    
+    PaddlePos = (GAME_AREA_WIDTH - PADDLE_WIDTH) / 2 ' 初始位置(列号)
+End Sub
+
+' 创建球
+Sub CreateBall()
+    Dim ball As Shape
+    Dim paddle As Shape
+    Dim gameArea As Shape
+    
+    Set gameArea = ActiveSheet.Shapes(GAME_AREA_NAME)
+    Set paddle = ActiveSheet.Shapes(PADDLE_NAME)
+    
+    Set ball = ActiveSheet.Shapes.AddShape(msoShapeOval, _
+        paddle.Left + paddle.Width / 2 - ActiveSheet.Cells(1, 1).Width * BALL_SIZE / 2, _
+        paddle.Top - 20, _
+        ActiveSheet.Cells(1, 1).Width * BALL_SIZE, _
+        ActiveSheet.Cells(1, 1).Height * BALL_SIZE)
+    
+    With ball
+        .Name = BALL_NAME
+        .Fill.ForeColor.RGB = RGB(255, 0, 0)
+        .Line.Visible = msoFalse
+    End With
+    
+    ' 设置球的初始位置和速度
+    BallX = paddle.Left + paddle.Width / 2
+    BallY = paddle.Top - 20
+    BallSpeedX = 15
+    BallSpeedY = -15
+End Sub
+
+' 创建砖块
+Sub CreateBricks()
+    Dim brick As Shape
+    Dim gameArea As Shape
+    Dim brickWidth As Double, brickHeight As Double
+    Dim i As Integer, j As Integer
+    Dim startX As Double, startY As Double
+    Dim brickColors As Variant
+    
+    Set gameArea = ActiveSheet.Shapes(GAME_AREA_NAME)
+    
+    ' 砖块颜色(每行不同颜色)
+    brickColors = Array(RGB(255, 0, 0), RGB(255, 128, 0), RGB(255, 255, 0), _
+                       RGB(0, 255, 0), RGB(0, 0, 255))
+    
+    ' 计算砖块大小
+    brickWidth = gameArea.Width / BRICK_COLS
+    brickHeight = 20 ' 固定高度
+    
+    ' 砖块起始位置(距离顶部)
+    startY = gameArea.Top + 10
+    
+    ' 创建砖块
+    For i = 1 To BRICK_ROWS
+        startX = gameArea.Left
+        For j = 1 To BRICK_COLS
+            Set brick = ActiveSheet.Shapes.AddShape(msoShapeRectangle, _
+                startX, startY, brickWidth - 2, brickHeight - 2) ' 减去2像素作为间隔
+            
+            With brick
+                .Name = BRICK_PREFIX & i & "_" & j
+                .Fill.ForeColor.RGB = brickColors(i - 1)
+                .Line.Visible = msoFalse
+            End With
+            
+            startX = startX + brickWidth
+        Next j
+        startY = startY + brickHeight
+    Next i
+    
+    BrickCount = BRICK_ROWS * BRICK_COLS
+End Sub
+
+' 更新游戏信息
+Sub UpdateGameInfo()
+    Dim infoArea As Shape
+    
+    Set infoArea = ActiveSheet.Shapes(INFO_AREA_NAME)
+    infoArea.TextFrame.Characters.Text = "生命: " & Lives & "  关数: " & Level & "  分数: " & Score
+End Sub
+
+' 设置事件处理
+Sub SetupEvents()
+    ' 完全解除可能存在的旧绑定
+    Application.OnKey "{LEFT}", ""
+    Application.OnKey "{RIGHT}", ""
+    
+    ' 显式绑定到公共函数（带单引号）
+    Application.OnKey "{LEFT}", "'Dump'"
+    Application.OnKey "{RIGHT}", "'Dump'"
+    
+    ' 调试输出
+    Debug.Print "事件绑定完成 " & Now
+End Sub
+
+' 移除事件处理
+Sub RemoveEvents()
+    ' 移除键盘事件
+    Application.OnKey "{LEFT}"
+    Application.OnKey "{RIGHT}"
+    Application.OnKey "a"
+    Application.OnKey "d"
+End Sub
+
+' 开始游戏循环
+Sub StartGameLoop()
+    Dim lastTick As Double
+    lastTick = Timer
+    
+    Do While GameActive
+        CheckKeyboard
+        ' 固定帧率控制
+        Do While Timer < lastTick + 0.05
+            DoEvents  ' 关键：允许处理键盘事件
+        Loop
+        
+        MoveBall
+        lastTick = Timer
+    Loop
+End Sub
+
+' 移动球
+Sub MoveBall()
+    Dim ball As Shape
+    Dim gameArea As Shape
+    Dim paddle As Shape
+    Dim shp As Shape
+    Dim brickHit As Boolean
+    Dim fromTop As Boolean, fromBottom As Boolean
+    Dim fromLeft As Boolean, fromRight As Boolean
+    
+    If Not GameActive Then Exit Sub
+    
+    ' 获取游戏基本对象（带错误处理）
+    On Error Resume Next
+    Set gameArea = ActiveSheet.Shapes(GAME_AREA_NAME)
+    Set ball = ActiveSheet.Shapes(BALL_NAME)
+    Set paddle = ActiveSheet.Shapes(PADDLE_NAME)
+    On Error GoTo 0
+    
+    ' 验证基本对象是否存在
+    If gameArea Is Nothing Or ball Is Nothing Or paddle Is Nothing Then
+        GameActive = False
+        Exit Sub
+    End If
+    
+    ' 更新球位置
+    BallX = BallX + BallSpeedX
+    BallY = BallY + BallSpeedY
+    
+    ' 检查边界碰撞
+    ' 左边界
+    If BallX <= gameArea.Left Then
+        BallX = gameArea.Left
+        BallSpeedX = -BallSpeedX
+    ' 右边界
+    ElseIf BallX >= gameArea.Left + gameArea.Width - ball.Width Then
+        BallX = gameArea.Left + gameArea.Width - ball.Width
+        BallSpeedX = -BallSpeedX
+    ' 上边界
+    ElseIf BallY <= gameArea.Top Then
+        BallY = gameArea.Top
+        BallSpeedY = -BallSpeedY
+    ' 下边界(生命减少)
+    ElseIf BallY >= gameArea.Top + gameArea.Height Then
+        Lives = Lives - 1
+        UpdateGameInfo
+        
+        If Lives <= 0 Then
+            GameActive = False
+            MsgBox "游戏结束!", vbExclamation, "游戏结束"
+            Exit Sub
+        Else
+            ' 重置球位置
+            On Error Resume Next
+            ball.Delete
+            On Error GoTo 0
+            CreateBall
+            Exit Sub
+        End If
+    End If
+    
+    ' 检查与挡板的碰撞
+    If BallY + ball.Height >= paddle.Top And _
+       BallY <= paddle.Top + paddle.Height And _
+       BallX + ball.Width >= paddle.Left And _
+       BallX <= paddle.Left + paddle.Width Then
+       
+        ' 根据击中挡板的位置改变反弹角度
+        Dim hitPos As Double
+        hitPos = (BallX + ball.Width / 2 - paddle.Left) / paddle.Width
+        
+        BallSpeedX = (hitPos - 0.5) * 40 ' -2到2之间的速度
+        BallSpeedY = -Abs(BallSpeedY) ' 确保向上反弹
+        BallY = paddle.Top - ball.Height ' 防止球卡在挡板内
+    End If
+    
+    ' 砖块碰撞检测 - 全新安全实现
+    brickHit = False
+    For Each shp In ActiveSheet.Shapes
+        ' 只处理砖块对象
+        If Left(shp.Name, Len(BRICK_PREFIX)) = BRICK_PREFIX Then
+            ' 安全获取砖块属性
+            Dim brickTop As Double, brickLeft As Double
+            Dim brickWidth As Double, brickHeight As Double
+            Dim brickValid As Boolean
+            
+            brickValid = True
+            On Error Resume Next
+            brickTop = shp.Top
+            brickLeft = shp.Left
+            brickWidth = shp.Width
+            brickHeight = shp.Height
+            If Err.Number <> 0 Then
+                brickValid = False
+                Err.Clear
+            End If
+            On Error GoTo 0
+            
+            ' 只处理有效砖块
+            If brickValid Then
+                ' 检查碰撞
+                If BallY <= brickTop + brickHeight And _
+                   BallY + ball.Height >= brickTop And _
+                   BallX + ball.Width >= brickLeft And _
+                   BallX <= brickLeft + brickWidth Then
+                   
+                    ' 击中砖块
+                    brickHit = True
+                    
+                    ' 安全删除砖块
+                    On Error Resume Next
+                    shp.Delete
+                    On Error GoTo 0
+                    
+                    ' 更新游戏状态
+                    BrickCount = BrickCount - 1
+                    Score = Score + SCORE_PER_BRICK
+                    UpdateGameInfo
+                    
+                    ' 检查通关条件
+                    If BrickCount <= 0 Then
+                        GameActive = False
+                        DoEvents
+                        Application.Wait Now + TimeSerial(0, 0, 0.1)
+                        MsgBox "恭喜通关!", vbInformation, "通关"
+                        Exit Sub
+                    End If
+                    
+                    ' 安全计算碰撞方向（使用已缓存的砖块属性）
+                    fromTop = Abs(BallY + ball.Height - brickTop) < Abs(BallSpeedY)
+                    fromBottom = Abs(BallY - (brickTop + brickHeight)) < Abs(BallSpeedY)
+                    fromLeft = Abs(BallX + ball.Width - brickLeft) < Abs(BallSpeedX)
+                    fromRight = Abs(BallX - (brickLeft + brickWidth)) < Abs(BallSpeedX)
+                    
+                    ' 根据碰撞方向反弹
+                    If fromTop Or fromBottom Then BallSpeedY = -BallSpeedY
+                    If fromLeft Or fromRight Then BallSpeedX = -BallSpeedX
+                    
+                    Exit For
+                End If
+            End If
+        End If
+    Next shp
+    
+
+    
+    ' 更新球位置
+    On Error Resume Next
+    ball.Left = BallX
+    ball.Top = BallY
+    On Error GoTo 0
+End Sub
+
+
+
+' 工作表鼠标移动事件(需要在对应工作表的代码模块中添加)
+Private Sub Worksheet_SelectionChange(ByVal Target As Range)
+    ' 空实现，实际使用时需要将此代码复制到工作表模块
+End Sub
+
+' 工作表鼠标移动事件(需要在对应工作表的代码模块中添加)
+Private Sub Worksheet_BeforeDoubleClick(ByVal Target As Range, Cancel As Boolean)
+    ' 空实现，实际使用时需要将此代码复制到工作表模块
+End Sub
+
+Sub FinishGame()
+    ClearGame
+    RemoveEvents
+    End
+End Sub
+
+Sub ForceExcelFocus()
+    ' 三重保障方案
+    Application.WindowState = xlNormal
+    Application.Top = 1
+    'AppActivate "Microsoft Excel", True
+    DoEvents
+End Sub
+
+Sub CheckKeyboard()
+    If GetAsyncKeyState(vbKeyLeft) < 0 Then MovePaddleLeft
+    If GetAsyncKeyState(vbKeyRight) < 0 Then MovePaddleRight
+End Sub
+
+Sub Dump()
+
+End Sub
