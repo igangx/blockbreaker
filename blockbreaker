@@ -288,7 +288,7 @@ Sub SetupEvents()
     Application.OnKey "{LEFT}", ""
     Application.OnKey "{RIGHT}", ""
     
-    ' 显式绑定到公共函数（带单引号）
+    ' 显式绑定到空函数，屏蔽移动单元格光标功能
     Application.OnKey "{LEFT}", "'Dump'"
     Application.OnKey "{RIGHT}", "'Dump'"
     
@@ -301,8 +301,6 @@ Sub RemoveEvents()
     ' 移除键盘事件
     Application.OnKey "{LEFT}"
     Application.OnKey "{RIGHT}"
-    Application.OnKey "a"
-    Application.OnKey "d"
 End Sub
 
 ' 开始游戏循环
@@ -507,5 +505,4 @@ Sub CheckKeyboard()
 End Sub
 
 Sub Dump()
-
 End Sub
